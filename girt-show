@@ -1,0 +1,59 @@
+#!/bin/dash
+
+if [ ! -d ".girt" ] # girt-init hasn't been run
+then
+  echo "girt-show: error: girt repository directory .girt not found" 1>&2
+  exit 1
+elif [ $# -ne 1 ]
+then
+  echo "usage: girt-show <commit>:<filename>" 1>&2
+  exit 1
+fi
+
+# get the name of the current branch
+HEAD=$(grep "HEAD: " ".girt/info" | cut -d' ' -f2)
+
+number=$(echo "$1" | cut -d":" -f1)
+filename=$(echo "$1" | cut -d":" -f2)
+
+# $number is not specified, shows the file in the index
+if [ -z $number ]
+then
+  index_file=".girt/${HEAD}/index/$filename"
+
+  # print error if not exist in index.
+  if [ ! -e "$index_file" ]
+  then
+    echo "girt-show: error: '$filename' not found in index" 1>&2
+    exit 1
+  fi
+  cat "$index_file"
+
+else
+  found="f"
+  # loop through all the commits to find the commit
+  for dir in $(find .girt/*/commits/* -type d 2>/dev/null)
+  do
+    if [ "$(echo $dir | cut -d'/' -f4)" = "$number" ]
+    then
+      found="t"
+      break
+    fi
+  done
+
+  commit_path="$dir"
+  commit_file="${commit_path}/$filename"
+  if [ "$found" = "f" ]
+  then
+    echo "girt-show: error: unknown commit '$number'" 1>&2
+    exit 1
+
+  elif [ ! -e "$commit_file" ]
+  then
+    echo "girt-show: error: '$filename' not found in commit $number" 1>&2
+    exit 1
+
+  else
+    cat "$commit_file"
+  fi
+fi

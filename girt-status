@@ -1,0 +1,122 @@
+#!/bin/dash
+
+if [ ! -d ".girt" ] # girt-init hasn't been run
+then
+  echo "girt-status: error: girt repository directory .girt not found" 1>&2
+  exit 1
+fi
+
+# get the name of the current branch
+HEAD=$(grep "HEAD: " ".girt/info" | cut -d' ' -f2)
+
+index_path=".girt/${HEAD}/index"
+commit_path=".girt/${HEAD}/commits"
+
+files=""
+for file in *
+do
+  [ -e "$file" ] || continue
+  files="$files$file\n"
+done
+
+for file in "${index_path}/"*
+do
+  [ -e "$file" ] || continue
+  file=$(echo "$file" | cut -d'/' -f4)
+  files="$files$file\n"
+done
+
+# find the most recent commit of this branch
+commit_nums=""
+for dir in ".girt/${HEAD}/commits/"*/
+do
+  [ -d "$dir" ] || continue
+  commit_num=$(echo "$dir" | cut -d'/' -f4)
+  commit_nums="${commit_nums}${commit_num}\n"
+done
+last_commit=$(echo "$commit_nums" | sort | tail -n 1)
+
+
+
+for file in "${commit_path}/${last_commit}/"*
+do
+  [ -e "$file" ] || continue
+  file=$(echo "$file" | cut -d'/' -f5)
+  files="$files$file\n"
+done
+
+# $files stores all the files from the working directory, index and
+# the repo
+files=$(echo "$files" | sort | uniq)
+
+for file in $files
+do
+  index_file="${index_path}/$file"
+  commit_file="${commit_path}/${last_commit}/$file"
+
+  if [ -e "$file" -a -e "$index_file" -a -e "$commit_file" ]
+  then
+    difference1=$(diff "$file" "$index_file")
+    difference2=$(diff "$file" "$commit_file")
+    # all three files have the same content
+    if [ "$difference1" = "" -a "$difference2" = "" ]
+    then
+      echo "$file - same as repo"
+
+    elif [ "$difference1" != "" -a "$difference2" = "" ]
+    then
+      echo "$file - file changed, changes not staged for commit"
+
+    elif [ "$difference1" = "" -a "$difference2" != "" ]
+    then
+      echo "$file - file changed, changes staged for commit"
+
+    elif [ "$difference1" != "" -a "$difference2" != "" ]
+    then
+      difference3=$(diff "$index_file" "$commit_file")
+      if [ "$difference3" = "" ]
+      then
+        echo "$file - file changed, changes not staged for commit"
+      else
+        echo "$file - file changed, different changes staged for commit"
+      fi
+    fi
+
+  elif [ ! -e "$file" -a -e "$index_file" -a -e "$commit_file" ] 
+  then
+    difference=$(diff "$index_file" "$commit_file")
+    if [ "$difference" = "" ]
+    then
+      echo "$file - file deleted"
+    else
+      echo "$file - file deleted, different changes staged for commit"
+    fi    
+
+  elif [ -e "$file" -a ! -e "$index_file" -a -e "$commit_file" ] 
+  then
+    echo "$file - untracked"
+
+  elif [ -e "$file" -a -e "$index_file" -a ! -e "$commit_file" ] 
+  then
+    difference=$(diff "$file" "$index_file")
+    if [ "$difference" = "" ]
+    then
+      echo "$file - added to index"
+    else
+      echo "$file - added to index, file changed"
+    fi
+
+  elif [ ! -e "$file" -a ! -e "$index_file" -a -e "$commit_file" ] 
+  then
+    echo "$file - deleted"
+
+  elif [ ! -e "$file" -a -e "$index_file" -a ! -e "$commit_file" ] 
+  then
+    echo "$file - added to index, file deleted"
+
+  elif [ -e "$file" -a ! -e "$index_file" -a ! -e "$commit_file" ] 
+  then
+    echo "$file - untracked"
+
+  fi
+done

@@ -1,0 +1,200 @@
+#!/bin/dash
+
+if [ ! -d ".girt" ] # girt-init hasn't been run
+then
+  echo "girt-rm: error: girt repository directory .girt not found" 1>&2
+  exit 1
+fi
+
+# get the name of the current branch
+HEAD=$(grep "HEAD: " ".girt/info" | cut -d' ' -f2)
+ncommits=$(grep "ncommits: " ".girt/info" | cut -d' ' -f2)
+
+if [ "$ncommits" = 0 ]
+then
+  echo "girt-checkout: error: this command can not be run until after the first commit" 1>&2
+  exit 1
+
+elif [ $# -ne 1 ]
+then
+  echo "usage: girt-checkout <branch>" 1>&2
+  exit 1
+fi
+
+branch=$1
+if [ ! -d ".girt/$branch" ]
+then
+  echo "girt-checkout: error: unknown branch '${branch}'" 1>&2
+  exit 1
+fi
+
+if [ "$HEAD" = "$branch" ]
+then
+  echo "Already on '$branch'"
+  exit 0
+fi
+
+# find the most recent commit of the current HEAD
+commit_nums=""
+for dir in ".girt/${HEAD}/commits/"*/
+do
+  [ -d "$dir" ] || continue
+  commit_num=$(echo "$dir" | cut -d'/' -f4)
+  commit_nums="${commit_nums}${commit_num}\n"
+done
+HEAD_most_recent_commit=$(echo "$commit_nums" | sort | tail -n 1)
+
+# find the most recent commit of this branch
+commit_nums=""
+for dir in ".girt/${branch}/commits/"*/
+do
+  [ -d "$dir" ] || continue
+  commit_num=$(echo "$dir" | cut -d'/' -f4)
+  commit_nums="${commit_nums}${commit_num}\n"
+done
+branch_most_recent_commit=$(echo "$commit_nums" | sort | tail -n 1)
+
+# if the checkout will cause a file to be overwritten, raise an error
+overwritten="f"
+overwritten_error_msg="girt-checkout: error: Your changes to the following files would be overwritten by checkout:"
+for file in *
+do
+  [ -e "$file" ] || continue
+  if [ -e ".girt/${branch}/commits/${branch_most_recent_commit}/${file}" ]
+  then
+    if [ -e ".girt/${HEAD}/index/${file}" -a ! -e ".girt/${HEAD}/commits/${HEAD_most_recent_commit}/${file}" ]
+    then
+      # depends on the content of the file in the index of the current branch and the content of the file
+      # in the branch that you are switching to, the file could be overwitten
+      difference=$(diff ".girt/${HEAD}/index/${file}" ".girt/${branch}/commits/${branch_most_recent_commit}/${file}")
+      if [ "$difference" = "" ]
+      then
+        # wouldn't be overwritten because they have the same content
+	continue
+      else
+	overwritten="t"
+	overwritten_error_msg="${overwritten_error_msg}\n${file}"
+      fi
+
+    elif [ ! -e ".girt/${HEAD}/commits/${HEAD_most_recent_commit}/${file}" ]
+    then
+      # if the file exists in the latest commit of the branch you are trying to switch to, but you haven't
+      # commit the changes of the file in the current branch, content will be overwritten
+      overwritten="t"
+      overwritten_error_msg="${overwritten_error_msg}\n${file}"
+
+    # if the file is being tracked and has committed in the current branch
+    elif [ -e ".girt/${HEAD}/index/${file}" -a -e ".girt/${HEAD}/commits/${HEAD_most_recent_commit}/${file}" ]
+    then
+      wk_index_difference=$(diff "$file" ".girt/${HEAD}/index/${file}")
+      index_repo_difference=$(diff ".girt/${HEAD}/index/${file}" ".girt/${HEAD}/commits/${HEAD_most_recent_commit}/${file}")
+      repo_repo_difference=$(diff ".girt/${HEAD}/commits/${HEAD_most_recent_commit}/${file}" ".girt/${branch}/commits/${branch_most_recent_commit}/${file}")
+
+      # if all changes are staged or commit
+      if [ "$wk_index_difference" = "" -o "$index_repo_difference" = "" ]
+      then
+        continue
+
+      else
+      # if there are unstaged or not committed content, content will be overwritten
+	overwritten="t"
+	overwritten_error_msg="${overwritten_error_msg}\n${file}"
+      fi
+    fi
+  fi
+done
+
+if [ "$overwritten" = "t" ]
+then
+  echo "$overwritten_error_msg" 1>&2
+  exit 1
+fi
+
+# copy the files into the new working directory and index
+most_recent_commit=".girt/${branch}/commits/${branch_most_recent_commit}"
+for file in "${most_recent_commit}/"*
+do
+  [ -e "$file" ] || continue
+  filename=$(echo "$file" | cut -d'/' -f5)
+
+  if [ -e ".girt/${branch}/index/${filename}.copy" ]
+  then
+    mv ".girt/${branch}/index/${filename}.copy" ".girt/${branch}/index/${filename}"
+  fi
+
+  # if the file in the working directory and/or index is deleted by girt-rm
+  if [ -e ".girt/${HEAD}/commits/${HEAD_most_recent_commit}/${filename}" ]
+  then
+    if [ ! -e ".girt/${HEAD}/index/${filename}" ]
+    then
+      cp ".girt/${branch}/index/${filename}" ".girt/${branch}/index/${filename}.copy"
+      rm ".girt/${branch}/index/${filename}"
+    fi
+    if [ ! -e "$filename" ]
+    then
+      continue
+    else
+      # the file exists in the working directory but deleted from the index
+      if [ ! -e ".girt/${HEAD}/index/${filename}" ]
+      then
+	cp "$file" "$filename"
+	continue
+      fi
+    fi
+  fi
+
+  # if the file in the target branch is not tracked by the current branch
+  # store it directly in the working directory and the index
+  if [ ! -e ".girt/${HEAD}/index/${filename}" ]
+  then
+    cp "$file" "$filename"
+    cp "$file" ".girt/${branch}/index/${filename}"
+    continue
+
+  # if the file in the target branch is tracked by the current branch but it's
+  # not committed yet
+  elif [ -e ".girt/${HEAD}/index/${filename}" -a ! -e ".girt/${HEAD}/commits/${HEAD_most_recent_commit}/${filename}" ]
+  then
+    cp "$file" "$filename"
+    cp ".girt/${HEAD}/index/${filename}" ".girt/${branch}/index/${filename}"
+    continue
+  fi
+
+  # if the control flow reached there, it means the file in the target branch is tracked
+  # by the current branch and has been committed
+  wk_index_difference=$(diff "$filename" ".girt/${HEAD}/index/${filename}")
+  index_repo_difference=$(diff ".girt/${HEAD}/index/${filename}" ".girt/${HEAD}/commits/${HEAD_most_recent_commit}/${filename}")
+
+  if [ "$wk_index_difference" = "" -a "$index_repo_difference" = "" ]
+  then
+    # there is no uncommitted new content in the HEAD, so we can simply
+    # restore the file from the branch's oldest commit
+    cp "$file" "$filename"
+    cp "$file" ".girt/${branch}/index/${filename}"
+
+  elif [ "$wk_index_difference" = "" -a "$index_repo_difference" != "" ]
+  then
+    # there are staged changes but not committed, so we need to copy the changes
+    # to the new branch to the index
+    cp ".girt/${HEAD}/index/${filename}" ".girt/${branch}/index/${filename}"
+
+  fi
+done
+
+for file in *
+do
+  [ -e "$file" ] || continue
+  # remove all the files in the working directory that are not tracked by the 
+  # branch that you are switching to
+  if [ -e ".girt/${HEAD}/index/${file}" -a ! -e ".girt/${branch}/index/${file}" ]
+  then
+    rm "$file"
+  fi
+done
+
+# switch branch by modifying the .girt/info file
+# HEAD: [branch name] indicates which is the current branch
+sed -E "s/HEAD: .+/HEAD: ${branch}/g" .girt/info > tmp
+mv tmp .girt/info
+
+echo "Switched to branch '$branch'"

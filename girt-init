@@ -1,0 +1,21 @@
+#!/bin/dash
+
+girt_repo='.girt'
+if [ $# -gt 0 ]
+then
+  echo "usage: girt-init" 1>&2
+
+elif [ -d $girt_repo ]
+then
+  echo "girt-init: error: $girt_repo already exists" 1>&2
+
+else
+  # master is the default branch. each branch has its own index and commits
+  mkdir -p "${girt_repo}/master/index"
+  mkdir -p "${girt_repo}/master/commits"
+  # HEAD indicates the current branch
+  echo "HEAD: master" > "${girt_repo}/info"
+  # ncommits indicates the current number of commits
+  echo "ncommits: 0" >> "${girt_repo}/info"
+  echo "Initialized empty girt repository in $girt_repo"
+fi

@@ -1,0 +1,20 @@
+#!/bin/dash
+
+./girt-init
+echo hello >a
+./girt-add a
+./girt-commit -m commit0
+./girt-branch b1
+./girt-branch b2
+
+./girt-checkout b1
+touch b
+./girt-add b
+./girt-commit -m commit1
+
+./girt-checkout b2
+touch c
+./girt-add c
+./girt-commit -m commit2
+
+./girt-checkout b1

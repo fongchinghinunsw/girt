@@ -1,0 +1,136 @@
+#!/bin/dash
+
+if [ ! -d ".girt" ] # girt-init hasn't been run
+then
+  echo "girt-rm: error: girt repository directory .girt not found" 1>&2
+  exit 1
+
+elif [ $# -lt 1 ] || [ "$1" != "--force" -a "$2" = "--cached" ]
+then
+  echo "usage: girt-rm [--force] [--cached] <filenames>" 1>&2
+  exit 1
+fi
+
+count=0
+for arg in "$@"
+do
+  # if it's a flag (starts with `-`)
+  if [ "$(echo $arg | grep -E '^[-].*')" != "" -a $count -gt 1 ]
+  then
+    echo "usage: girt-rm [--force] [--cached] <filenames>" 1>&2
+    exit 1
+  fi
+  count=$((count + 1))
+done
+
+# get the name of the current branch
+HEAD=$(grep "HEAD: " ".girt/info" | cut -d' ' -f2)
+index_path=".girt/${HEAD}/index"
+commit_path=".girt/${HEAD}/commits"
+
+# get the number of commits so far
+ncommits=$(grep "ncommits: " ".girt/info" | cut -d' ' -f2)
+last_commit=$((ncommits - 1))
+
+for arg in "$@"
+do
+  # if it's not a flag (starts with `-`)
+  if [ "$(echo $arg | grep -E '^[^-].*')" != "" ]
+  then
+    if [ ! -e "${index_path}/$arg" ]
+    then
+      echo "girt-rm: error: '$arg' is not in the girt repository" 1>&2
+      exit 1
+    fi
+  fi
+done
+
+for arg in "$@"
+do
+  # $arg is not a flag, that implies it's a filename
+  if [ "$(echo $arg | grep -E '^[^-].*')" != "" ]
+  then
+
+    # if $1 is not `--force` then the following errors would occur to
+    # prevent work lost
+    if [ "$1" != "--force" ]
+    then
+      index_file="${index_path}/$arg"
+      commit_file="${commit_path}/${last_commit}/$arg"
+
+      if [ "$1" != "--cached" -a "$2" != "--cached" ]
+      then
+        if [ -e "$arg" -a -e "$index_file" -a -e "$commit_file" ]
+        then
+          difference1=$(diff "$arg" "$index_file")
+          difference2=$(diff "$arg" "$commit_file")
+          difference3=$(diff "$index_file" "$commit_file")
+          if [ "$difference1" != "" -a "$difference3" != "" ]
+          then
+            echo "girt-rm: error: '$arg' in index is different to both to the working file and the repository" 1>&2
+            exit 1
+
+          elif [ "$difference1" = "" -a "$difference3" != "" ]
+          then
+            echo "girt-rm: error: '$arg' has staged changes in the index" 1>&2
+            exit 1
+
+          elif [ "$difference2" != "" ]
+          then
+            echo "girt-rm: error: '$arg' in the repository is different to the working file" 1>&2
+            exit 1
+          fi
+          
+        elif [ -e "$arg" -a -e "$index_file" -a ! -e "$commit_file" ]
+        then
+          difference=$(diff "$arg" "$index_file")
+          if [ "$difference" = "" ]
+          then
+            echo "girt-rm: error: '$arg' has staged changes in the index" 1>&2
+            exit 1
+
+          else
+            echo "girt-rm: error: '$arg' in index is different to both to the working file and the repository" 1>&2
+            exit 1
+          fi
+        fi
+      else
+        if [ -e "$arg" -a -e "$index_file" -a -e "$commit_file" ]
+        then
+          difference1=$(diff "$arg" "$index_file")
+          difference3=$(diff "$index_file" "$commit_file")
+
+          if [ "$difference1" != "" -a "$difference3" != "" ]
+          then
+            echo "girt-rm: error: '$arg' in index is different to both to the working file and the repository" 1>&2
+            exit 1
+          fi
+        elif [ -e "$arg" -a -e "$index_file" -a ! -e "$commit_file" ]
+        then
+          difference=$(diff "$arg" "$index_file")
+          if [ "$difference" != "" ]
+          then
+            echo "girt-rm: error: '$arg' in index is different to both to the working file and the repository" 1>&2
+            exit 1
+          fi
+        fi
+      fi
+    fi
+
+    rm "${index_path}/$arg"
+
+    # get the next commit number.
+    ncommits=$(grep "ncommits: " ".girt/info" | cut -d' ' -f2)
+    last_commit=$((ncommits - 1))
+
+    # If `--cached` flag is true, exit and don't delete the file in the
+    # working directory.
+    if [ "$1" = "--cached" -o "$2" = "--cached" ]
+    then
+      continue
+    fi
+
+    # remove the file from the working directory.
+    rm "$arg"
+  fi
+done

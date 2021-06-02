@@ -1,0 +1,23 @@
+#!/bin/dash
+
+if [ ! -d ".girt" ] # girt-init hasn't been run
+then
+  echo "girt-log: error: girt repository directory .girt not found" 1>&2
+  exit 1
+elif [ $# -gt 0 ]
+then
+  echo "usage: girt-log" 1>&2
+  exit 1
+fi
+
+# get the name of the current branch
+HEAD=$(grep "HEAD: " ".girt/info" | cut -d' ' -f2)
+commit_path=".girt/${HEAD}/commits"
+
+# $(ls -p .girt/master/commits/ | grep -v / | sed 's/-msg//' | sort -rn)
+# gives a sorted list of commit numbers (e.g. 0, 1, 69)
+for commit_num in $(ls -p "$commit_path" | grep -v / | sed 's/-msg//' | sort -rn)
+do
+  commit_msg=$(cat "${commit_path}/${commit_num}-msg")
+  echo "$commit_num $commit_msg"
+done

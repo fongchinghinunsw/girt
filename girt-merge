@@ -1,0 +1,367 @@
+#!/bin/dash
+
+PATH="$PATH:."
+
+if [ ! -d ".girt" ] # girt-init hasn't been run
+then
+  echo "girt-log: error: girt repository directory .girt not found" 1>&2
+  exit 1
+fi
+
+if [ "$2" = "" ]
+then
+  echo "girt-merge: error: empty commit message" 1>&2
+  exit 1
+
+elif [ "$2" != "-m" ]
+then
+  echo "usage: girt-merge <branch|commit> -m message" 1>&2
+  exit 1
+
+elif [ "$#" -ne 3 ]
+then
+  echo "usage: girt-merge <branch|commit> -m message" 1>&2
+  exit 1
+fi
+
+if [ "$(echo $1 | grep -E '^[0-9]+$')" != "" ]
+  then
+  # get the next commit number.
+  ncommits=$(grep "ncommits: " ".girt/info" | cut -d' ' -f2)
+  if [ "${1}" -ge "$ncommits" ]
+  then
+    echo "girt-merge: error: unknown commit '${1}'" 1>&2
+    exit 1
+  fi
+else
+  if [ ! -d ".girt/${1}" ]
+  then
+    echo "girt-merge: error: unknown branch '${1}'" 1>&2
+    exit 1
+  fi
+fi
+
+# get the name of the current branch
+HEAD=$(grep "HEAD: " ".girt/info" | cut -d' ' -f2)
+
+# get the most recent commit number in HEAD
+commit_nums=""
+for dir in ".girt/${HEAD}/commits/"*/
+do
+  commit_num=$(echo "$dir" | cut -d'/' -f4)
+  commit_nums="${commit_nums}${commit_num}\n"
+done
+most_recent_commit_HEAD=$(echo "$commit_nums" | sort | tail -n 1) 
+
+# $1 is a commit
+if [ "$(echo $1 | grep -E '^[0-9]+$')" != "" ]
+then
+  # find the path to the directory(branch) that contains the commit, as there
+  # could be multiple branches contain this commit, we use `head -n 1` to get 
+  # the first result
+  path_to_commit=$(find . -type d -name "${1}" | head -n 1 | cut -d'/' -f2-4)
+  
+  branch_name=$(echo "$path_to_commit" | cut -d'/' -f2)
+  # ****************************************
+  # This section is checking a merging error
+  # ****************************************
+  # get the most recent commit number in the branch
+  commit_nums=""
+  for dir in ".girt/${branch_name}/commits/"*/
+  do
+    commit_num=$(echo "$dir" | cut -d'/' -f4)
+    commit_nums="${commit_nums}${commit_num}\n"
+  done
+  most_recent_commit_1=$(echo "$commit_nums" | sort | tail -n 1) 
+
+  # get a list of parent commits of the HEAD
+  commit_nums_HEAD=""
+  for dir in ".girt/${HEAD}/commits/"*/
+  do
+    commit_num=$(echo "$dir" | cut -d'/' -f4)
+    commit_nums_HEAD="${commit_nums_HEAD}${commit_num}\n"
+  done
+  # remove the trailing newline in the variable
+  commit_nums_HEAD="$(echo $commit_nums_HEAD | sed '$d')"
+
+  # get a list of parent commits of the branch
+  commit_nums_1=""
+  for dir in ".girt/${branch_name}/commits/"*/
+  do
+    commit_num=$(echo "$dir" | cut -d'/' -f4)
+    commit_nums_1="${commit_nums_1}${commit_num}\n"
+  done
+  # remove the trailing newline in the variable
+  commit_nums_1="$(echo $commit_nums_1 | sed '$d')"
+
+  # find the Largest Common Parent of the two commits
+  while [ "$commit_nums_HEAD" != "" -a "$commit_nums_1" != "" ]
+  do
+    cur_HEAD=$(echo "$commit_nums_HEAD" | tail -n 1)
+    cur_1=$(echo "$commit_nums_1" | tail -n 1)
+    if [ "$cur_HEAD" -eq "$cur_1" ]
+    then
+      # largest common parent
+      LCP="$cur_HEAD"
+      break
+    elif [ "$cur_HEAD" -gt "$cur_1" ]
+    then
+      commit_nums_HEAD=$(echo "$commit_nums_HEAD" | sed '$d')
+    else
+      commit_nums_1=$(echo "$commit_nums_1" | sed '$d')
+    fi
+  done
+
+  # check if a file has been changed in both branches since the LCP
+  parent_path=".girt/${HEAD}/commits/${LCP}"
+  for file_path in "${parent_path}/"*
+  do
+    filename=$(echo "$file_path" | cut -d'/' -f5)
+    difference1=$(diff "$file_path" ".girt/${HEAD}/commits/${most_recent_commit_HEAD}/$filename")
+    difference2=$(diff "$file_path" ".girt/${branch_name}/commits/${most_recent_commit_1}/$filename")
+    if [ "$difference1" != "" -a "$difference2" != "" ]
+    then
+      echo "girt-merge: error: can not merge" 1>&2
+      exit 1
+    fi
+  done
+
+  for file_path in ".girt/${branch_name}/commits/${1}/"*
+  do
+    filename=$(echo "$file_path" | cut -d'/' -f5)
+    if [ ! -e ".girt/${HEAD}/commits/${LCP}/${filename}" -a -e "$filename" ]
+    then
+      echo "girt-merge: error: can not merge" 1>&2
+      exit 1
+    fi
+  done
+  # ****************************************
+
+  # if found_ancestor="t", it means we can do fast-forward merge
+  found_ancestor="f"
+  # loop throuh all the commits in this branch, from earliest to most recent.
+  for dir in "$path_to_commit/"*/
+  do
+    commit_num=$(echo "$dir" | cut -d'/' -f4)
+
+    if [ "$commit_num" -eq "$most_recent_commit_HEAD" ]
+    then
+      found_ancestor="t"
+    elif [ "$commit_num" -gt "$1" ]
+    then
+      break
+    fi
+
+    if [ "$found_ancestor" = "t" ]
+    then
+      # copy the commit into the branch you are merging into
+      cp -r "$dir" ".girt/${HEAD}/commits/"
+      # remove the trailing `/` from the directory name
+      dir=$(echo "$dir" | sed 's/\/$//')
+      cp "${dir}-msg" ".girt/${HEAD}/commits/"
+    fi
+  done
+
+  if [ "$found_ancestor" = "t" ]
+  then
+    # copy all the files in commit `$1` to the index
+    cp -r ".girt/${branch_name}/commits/${1}/." ".girt/${HEAD}/index"
+    cp -r ".girt/${branch_name}/commits/${1}/." "./"
+
+    echo "Fast-forward: no commit created"
+    exit 0
+  else
+    # if no error, proceed to merge
+    # merge index
+    for file_path in ".girt/${branch_name}/commits/${1}/"*
+    do
+      [ -e "$file_path" ] || continue
+      filename=$(echo "$file_path" | cut -d'/' -f5)
+
+      cp "$file_path" ".girt/${HEAD}/index/${filename}"
+    done
+  fi
+  # get the next commit number.
+  ncommits=$(grep "ncommits: " ".girt/info" | cut -d' ' -f2)
+  new_commit=$ncommits
+  ncommits=$((ncommits + 1))
+  sed -E "s/ncommits: ([0-9]|[1-9]+[0-9]*)/ncommits: ${ncommits}/g" .girt/info > tmp
+  mv tmp .girt/info
+  echo "Committed as commit $new_commit"
+  
+# $1 is a branch
+else
+
+  # get the most recent commit number in the branch
+  commit_nums=""
+  for dir in ".girt/${1}/commits/"*/
+  do
+    commit_num=$(echo "$dir" | cut -d'/' -f4)
+    commit_nums="${commit_nums}${commit_num}\n"
+  done
+  most_recent_commit_1=$(echo "$commit_nums" | sort | tail -n 1) 
+
+  # check if $1 was branched from the current HEAD
+  # if so, we can do fast-forward
+  found_ancestor="f"
+  for dir in ".girt/${1}/commits/"*/
+  do
+    commit_num=$(echo "$dir" | cut -d'/' -f4)
+    if [ "$commit_num" -eq "$most_recent_commit_HEAD" ]
+    then
+      found_ancestor="t"
+    fi
+    if [ "$found_ancestor" = "t" ]
+    then
+      # copy the commit into the branch you are merging into
+      cp -r "$dir" ".girt/${HEAD}/commits/"
+      # remove the trailing `/` from the directory name
+      dir=$(echo "$dir" | sed 's/\/$//')
+      cp "${dir}-msg" ".girt/${HEAD}/commits/"
+    fi
+  done
+  if [ "$found_ancestor" = "t" ]
+  then
+    cp -r ".girt/${1}/index" ".girt/${HEAD}/"
+  fi
+
+  if [ "$found_ancestor" = "t" ]
+  then
+    for file_path in ".girt/${1}/commits/${most_recent_commit_1}/"*
+    do
+      [ -e "$file_path" ] || continue
+
+      filename=$(echo "$file_path" | cut -d'/' -f5)
+      cp "$file_path" "$filename"
+    done
+
+    echo "Fast-forward: no commit created"
+    exit 0
+  else
+    # ****************************************
+    # This section is checking a merging error
+    # ****************************************
+
+    # get a list of parent commits of the HEAD
+    commit_nums_HEAD=""
+    for dir in ".girt/${HEAD}/commits/"*/
+    do
+      commit_num=$(echo "$dir" | cut -d'/' -f4)
+      commit_nums_HEAD="${commit_nums_HEAD}${commit_num}\n"
+    done
+    # remove the trailing newline in the variable
+    commit_nums_HEAD="$(echo $commit_nums_HEAD | sed '$d')"
+
+    # get a list of parent commits of the branch
+    commit_nums_1=""
+    for dir in ".girt/${1}/commits/"*/
+    do
+      commit_num=$(echo "$dir" | cut -d'/' -f4)
+      commit_nums_1="${commit_nums_1}${commit_num}\n"
+    done
+    # remove the trailing newline in the variable
+    commit_nums_1="$(echo $commit_nums_1 | sed '$d')"
+
+    # find the Largest Common Parent of the two commits
+    while [ "$commit_nums_HEAD" != "" -a "$commit_nums_1" != "" ]
+    do
+      cur_HEAD=$(echo "$commit_nums_HEAD" | tail -n 1)
+      cur_1=$(echo "$commit_nums_1" | tail -n 1)
+      if [ "$cur_HEAD" -eq "$cur_1" ]
+      then
+        # largest common parent
+        LCP="$cur_HEAD"
+        break
+      elif [ "$cur_HEAD" -gt "$cur_1" ]
+      then
+        commit_nums_HEAD=$(echo "$commit_nums_HEAD" | sed '$d')
+      else
+        commit_nums_1=$(echo "$commit_nums_1" | sed '$d')
+      fi
+    done
+
+    # check if a file has been changed in both branches since the LCP
+    parent_path=".girt/${HEAD}/commits/${LCP}"
+    for file_path in "${parent_path}/"*
+    do
+      filename=$(echo "$file_path" | cut -d'/' -f5)
+      difference1=$(diff "$file_path" ".girt/${HEAD}/commits/${most_recent_commit_HEAD}/$filename")
+      difference2=$(diff "$file_path" ".girt/${1}/commits/${most_recent_commit_1}/$filename")
+      if [ "$difference1" != "" -a "$difference2" != "" ]
+      then
+        echo "girt-merge: error: can not merge" 1>&2
+        exit 1
+      fi
+    done
+
+    for file_path in ".girt/${1}/commits/${commit_nums_1}/"*
+    do
+      filename=$(echo "$file_path" | cut -d'/' -f5)
+      if [ ! -e ".girt/${HEAD}/commits/${LCP}/${filename}" -a -e "$filename" ]
+      then
+	echo "girt-merge: error: can not merge" 1>&2
+	exit 1
+      fi
+    done
+
+    # ****************************************
+
+    # merge index
+    for file_path in ".girt/${1}/index/"*
+    do
+      [ -e "$file_path" ] || continue
+      filename=$(echo "$file_path" | cut -d'/' -f4)
+
+      if [ -e ".girt/${HEAD}/commits/${most_recent_commit_HEAD}/${filename}" -a -e ".girt/${HEAD}/commits/${LCP}/${filename}" ]
+      then
+	difference=$(diff ".girt/${HEAD}/commits/${most_recent_commit_HEAD}/${filename}" ".girt/${HEAD}/commits/${LCP}/${filename}")
+      else
+        difference=""
+      fi
+
+      if [ "$most_recent_commit_HEAD" -gt "$most_recent_commit_1" -a "$difference" != "" ]
+      then
+        continue
+      fi
+      cp "$file_path" ".girt/${HEAD}/index/${filename}"
+    done
+
+    # merge working directory
+    for file_path in ".girt/${1}/commits/${most_recent_commit_1}/"*
+    do
+      [ -e "$file_path" ] || continue
+      filename=$(echo "$file_path" | cut -d'/' -f5)
+
+      if [ -e ".girt/${HEAD}/commits/${most_recent_commit_HEAD}/${filename}" -a -e ".girt/${HEAD}/commits/${LCP}/${filename}" ]
+      then
+	difference=$(diff ".girt/${HEAD}/commits/${most_recent_commit_HEAD}/${filename}" ".girt/${HEAD}/commits/${LCP}/${filename}")
+      else
+        difference=""
+      fi
+
+      if [ "$most_recent_commit_HEAD" -gt "$most_recent_commit_1" -a "$difference" != "" ]
+      then
+        continue
+      fi
+      cp "$file_path" "$filename"
+    done
+
+    # merge commit-msg
+    for file_path in ".girt/${1}/commits/"*
+    do
+      [ -e "$file_path" ] || continue
+      
+      if [ -d "$file_path" ]
+      then
+        cp -r "$file_path" ".girt/${HEAD}/commits/"
+      else
+	filename=$(echo "$file_path" | cut -d'/' -f4)
+	commit_num=$(echo "$filename" | sed 's/-msg//')
+	cp "$file_path" ".girt/${HEAD}/commits/${filename}"
+      fi
+    done
+
+    girt-commit -m "$3"
+
+  fi
+fi

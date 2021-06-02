@@ -1,0 +1,135 @@
+#!/bin/dash
+
+if [ ! -d ".girt" ] # girt-init hasn't been run
+then
+  echo "girt-commit: error: girt repository directory .girt not found" 1>&2
+  exit 1
+
+elif [ ! "$1" = "-m" -a ! "$2" = "-m" ] || [ $# -lt 2 -o $# -gt 3 ]
+then
+  echo "usage: girt-commit [-a] -m commit-message" 1>&2
+  exit 1
+
+elif [ $# -eq 3 ]
+then
+  if [ "$1" != "-a" -o "$2" != "-m" ]
+  then
+    echo "usage: girt-commit [-a] -m commit-message" 1>&2
+    exit 1
+  fi 
+fi
+
+# get the name of the current branch
+HEAD=$(grep "HEAD: " ".girt/info" | cut -d' ' -f2)
+
+index_path=".girt/${HEAD}/index"
+commit_path=".girt/${HEAD}/commits"
+
+# nothing to commit if there is no change between the last commit and the index
+change="f"
+
+# if `-a` option is given, for all files already in the index, add 
+# their contents in the working directory to the index before commit
+if [ $1 = "-a" ]
+then
+  for file_path in "${index_path}/"*
+  do
+    # if the file doesn't exist, continue
+    [ -e "$file_path" ] || continue
+
+    # extract the filename from the relative path
+    filename=$(echo "$file_path" | cut -d'/' -f4)
+    if [ -e "$filename" ]
+    then
+      cp "$filename" "$file_path"
+    else
+      change="t"
+      break
+    fi
+  done
+fi
+
+# get the next commit number.
+ncommits=$(grep "ncommits: " ".girt/info" | cut -d' ' -f2)
+
+last_commit=$((ncommits - 1))
+for file_path in "${index_path}/"*
+do
+  # if the file doesn't exist, continue
+  [ -e "$file_path" ] || continue
+
+  # extract the filename from the relative path
+  filename=$(echo "$file_path" | cut -d'/' -f4)
+
+  index_file="${index_path}/$filename"
+  commit_file="${commit_path}/${last_commit}/$filename"
+
+
+  # if this file doesn't exist in the last commit, that means there is
+  # at least one change in the index or there has no commit yet
+  if [ ! -e "$commit_file" ]
+  then
+    change="t"
+    break
+  fi
+
+  difference=$(diff "$index_file" "$commit_file")
+  # the file in the index has changed since the last commit
+  if [ "$difference" != "" ]
+  then
+    change="t"
+    break
+  fi
+done
+
+# check if the file has been deleted from the index since last commit
+if [ "$ncommits" -ge 1 ]
+then
+  for file_path in "${commit_path}/${last_commit}/"*
+  do
+    # if the file doesn't exist, continue
+    [ -e "$file_path" ] || continue
+
+    filename=$(echo "$file_path" | cut -d'/' -f5)
+    if [ ! -e "${index_path}/$filename" ]
+    then
+      change="t"
+      break
+    fi
+  done
+fi
+
+# if nothing changed, nothing to commit
+if [ "$change" = "f" ]
+then
+  echo "nothing to commit"
+  exit 0
+fi
+
+new_commit=$ncommits
+new_commit_path="${commit_path}/${new_commit}"
+mkdir "$new_commit_path"
+
+for file_path in "${index_path}/"*
+do
+  [ -e "$file_path" ] || continue
+  
+  # extract the filename from the relative path
+  filename=$(echo "$file_path" | cut -d'/' -f4)
+  # copy the file from the index to the commit.
+  cp "$file_path" "${new_commit_path}/$filename"
+done
+
+if [ "$1" = "-m" ]
+then
+  echo "$2" > "${commit_path}/${new_commit}-msg"
+
+elif [ "$2" = "-m" ]
+then
+  echo "$3" > "${commit_path}/${new_commit}-msg"
+fi
+
+ncommits=$((ncommits + 1))
+sed -E "s/ncommits: ([0-9]|[1-9]+[0-9]*)/ncommits: ${ncommits}/g" .girt/info > tmp
+mv tmp .girt/info
+echo "Committed as commit $new_commit"

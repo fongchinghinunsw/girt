@@ -1,0 +1,22 @@
+#!/bin/dash
+
+./girt-init
+touch a
+./girt-add a
+./girt-commit -m commit0
+./girt-branch b1
+./girt-checkout b1
+touch b
+./girt-add b
+./girt-commit -m commit1
+touch c
+./girt-add c
+./girt-commit -m commit2
+./girt-checkout master
+./girt-branch b2
+./girt-checkout b2
+
+touch d
+./girt-add d
+./girt-commit -m commit3
+./girt-checkout master

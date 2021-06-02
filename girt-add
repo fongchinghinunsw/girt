@@ -1,0 +1,51 @@
+#!/bin/dash
+
+if [ ! -d ".girt" ] # girt-init hasn't been run
+then
+  echo "girt-add: error: girt repository directory .girt not found"
+  exit 1
+
+elif [ $# -eq 0 ] # no provided filenames
+then
+  echo "usage: girt-add <filenames>"
+  exit 1
+fi
+
+# get the name of the current branch
+HEAD=$(grep "HEAD: " ".girt/info" | cut -d' ' -f2)
+
+index_path=".girt/${HEAD}/index"
+
+for file in "$@"
+do
+  # filename starting with an alphanumeric character ([a-zA-Z0-9]) and only
+  # containing alpha-numeric characters, plus '.', '-' and '_' characters
+  if [ "$(echo $file | grep -E '^[a-zA-Z0-9][a-zA-Z0-9._\-]*$')" = "" ]
+  then
+    echo "girt-add: error: invalid filename '$file'" 1>&2
+    exit 1
+
+  # the file doesn't exist in the working directory or index
+  elif [ ! -e "$file" -a ! -e "${index_path}/$file" ]
+  then
+    echo "girt-add: error: can not open '$file'" 1>&2
+    exit 1
+    
+  fi
+done
+
+for file in "$@"
+do
+  if [ -e "$file" ]
+  then
+    # copy the file to the index of the current branch
+    cp "$file" "$index_path"
+  else
+    if [ -e "${index_path}/$file" ]
+    then
+      # the file was added to the index before but it's now deleted
+      # in the working directory
+      rm "${index_path}/$file"
+    fi
+  fi
+done

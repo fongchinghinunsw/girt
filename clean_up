@@ -1,0 +1,12 @@
+#!/bin/dash
+
+for file in *
+do
+  filename=$(echo "$file" | grep -E "^test|^girt-")
+  if [ "$filename" = "" -a "$file" != "clean_up" -a "$file" != "diary.txt" ]
+  then
+    rm "$file"
+  fi
+done
+
+rm -rvf .girt
